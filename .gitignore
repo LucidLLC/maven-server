@@ -1,0 +1,7 @@
+maven
+.env
+*.exe
+*.s
+*.o
+*.db
+*.jar
