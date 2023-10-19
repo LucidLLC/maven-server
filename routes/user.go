@@ -2,9 +2,11 @@ package routes
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/gofrs/uuid"
@@ -14,6 +16,10 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/crypto/bcrypt"
+)
+
+var (
+	UsernamePattern = regexp.MustCompile("^([a-zA-Z0-9_]{16})$")
 )
 
 type AuthRequest struct {
@@ -40,6 +46,10 @@ func (u *UserRoutesHandler) Signup(c echo.Context) error {
 	if err := c.Bind(&signupRequest); err != nil {
 		log.Println(err)
 		return c.JSON(http.StatusBadRequest, model.NewError(http.StatusBadRequest, "invalid body"))
+	}
+
+	if !UsernamePattern.MatchString(signupRequest.Username) {
+		return c.JSON(http.StatusBadRequest, "invalid username")
 	}
 
 	cursor, err := u.DB.Collection("users").Aggregate(context.Background(), bson.A{
@@ -91,35 +101,125 @@ func (u *UserRoutesHandler) Signup(c echo.Context) error {
 
 	u.DB.Collection("users").InsertOne(context.Background(), createdUser)
 
-	authToken, refreshToken, err := createTokenPairForUser(createdUser)
+	authToken, refreshToken, err := createTokenPairForUser(createdUser.Id)
 
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, model.NewError(http.StatusInternalServerError, err.Error()))
 	}
 
-	cookie := new(http.Cookie)
-	{
-		cookie.Name = "mavenRefreshToken"
-		cookie.Value = refreshToken
-		cookie.Expires = createdAt.Add(7 * 24 * time.Hour)
-		cookie.SameSite = http.SameSiteNoneMode
-		cookie.Secure = true
-		cookie.HttpOnly = true
-	}
-	c.SetCookie(cookie)
+	c.SetCookie(&http.Cookie{
+		Name:     "mavenRefreshToken",
+		Value:    refreshToken,
+		Expires:  createdAt.Add(7 * 24 * time.Hour),
+		SameSite: http.SameSiteNoneMode,
+		Secure:   true,
+		HttpOnly: true,
+	})
 
 	return c.String(http.StatusOK, authToken)
 }
 
 func (u *UserRoutesHandler) Login(c echo.Context) error {
-	u.DB.Collection("users").FindOne(context.Background(), bson.M{
+	var signinRequest AuthRequest
+
+	if err := c.Bind(&signinRequest); err != nil {
+		log.Println(err)
+		return c.JSON(http.StatusBadRequest, model.NewError(http.StatusBadRequest, "invalid body"))
+	}
+
+	result := u.DB.Collection("users").FindOne(context.Background(), bson.M{
 		"$text": bson.M{
-			"$search":        "",
-			"$caseSensitive": true,
+			"$search":        signinRequest.Username,
+			"$caseSensitive": false,
 		},
 	})
-	return nil
+
+	if err := result.Err(); err != nil {
+		return c.JSON(http.StatusUnauthorized, "could not find user")
+	}
+
+	var user model.User
+
+	if err := result.Decode(&user); err != nil {
+		return c.JSON(http.StatusUnauthorized, "could not find user")
+	}
+
+	err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(signinRequest.Password))
+
+	// passwords don't match - disallow login
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, "incorrect password")
+	}
+
+	now := time.Now()
+	authToken, refreshToken, err := createTokenPairForUser(user.Id)
+
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, model.NewError(http.StatusInternalServerError, err.Error()))
+	}
+
+	c.SetCookie(&http.Cookie{
+		Name:     "mavenRefreshToken",
+		Value:    refreshToken,
+		Expires:  now.Add(7 * 24 * time.Hour),
+		SameSite: http.SameSiteNoneMode,
+		Secure:   true,
+		HttpOnly: true,
+	})
+
+	return c.String(http.StatusOK, authToken)
 }
+
+func (*UserRoutesHandler) Refresh(c echo.Context) error {
+	refreshToken, err := c.Cookie("mavenRefreshToken")
+
+	if err != nil {
+		return c.String(http.StatusUnauthorized, "no token found")
+	}
+
+	var claims jwt.MapClaims
+
+	parsedJWT, err := jwt.ParseWithClaims(refreshToken.Value, &claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("invalid token")
+		}
+
+		return os.Getenv("JWT_SECRET"), nil
+	})
+
+	if err != nil {
+		return c.String(http.StatusBadRequest, err.Error())
+	}
+
+	if !parsedJWT.Valid {
+		return c.String(http.StatusUnauthorized, "invalid token")
+	}
+
+	if claims["use"] != "refresh" {
+		return c.String(http.StatusUnauthorized, "invalid use of token")
+	}
+
+	newAuthToken, newRefreshToken, err := createTokenPairForUser(claims["sub"].(string))
+
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	now := time.Now()
+
+	c.SetCookie(&http.Cookie{
+		Name:     "mavenRefreshToken",
+		Value:    newRefreshToken,
+		Expires:  now.Add(7 * 24 * time.Hour),
+		SameSite: http.SameSiteNoneMode,
+		Secure:   true,
+		HttpOnly: true,
+	})
+
+	return c.String(http.StatusOK, newAuthToken)
+
+}
+
 func (*UserRoutesHandler) Logout(c echo.Context) error {
 	c.SetCookie(&http.Cookie{
 		Name:     "mavenRefreshToken",
@@ -128,18 +228,18 @@ func (*UserRoutesHandler) Logout(c echo.Context) error {
 		SameSite: http.SameSiteNoneMode,
 		HttpOnly: true,
 	})
-	return nil
+	return c.String(http.StatusOK, "logged out")
 }
 func (*UserRoutesHandler) GenerateToken(c echo.Context) error {
 	return nil
 }
 
-func createTokenPairForUser(user *model.User) (string, string, error) {
+func createTokenPairForUser(userId string) (string, string, error) {
 
 	createdAt := time.Now()
 	authToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"iat": jwt.NewNumericDate(createdAt),
-		"sub": user.Id,
+		"sub": userId,
 		"exp": jwt.NewNumericDate(createdAt.Add(24 * time.Hour)),
 		"use": "identity",
 		"scopes": []string{
@@ -149,7 +249,7 @@ func createTokenPairForUser(user *model.User) (string, string, error) {
 
 	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"iat": jwt.NewNumericDate(createdAt),
-		"sub": user.Id,
+		"sub": userId,
 		"exp": jwt.NewNumericDate(createdAt.Add(7 * 24 * time.Hour)),
 		"use": "refresh",
 	})
