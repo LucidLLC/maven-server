@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	UsernamePattern = regexp.MustCompile("^([a-zA-Z0-9_]{16})$")
+	UsernamePattern = regexp.MustCompile("^([a-zA-Z0-9_]{3,16})$")
 )
 
 type AuthRequest struct {
@@ -37,6 +37,8 @@ func (u *UserRoutesHandler) Register(e *echo.Group) {
 	authGroup := e.Group("/auth")
 	{
 		authGroup.POST("/signup", u.Signup)
+		authGroup.POST("/login", u.Login)
+		authGroup.POST("/refresh", u.Refresh)
 	}
 }
 
@@ -184,7 +186,7 @@ func (*UserRoutesHandler) Refresh(c echo.Context) error {
 			return nil, errors.New("invalid token")
 		}
 
-		return os.Getenv("JWT_SECRET"), nil
+		return []byte(os.Getenv("JWT_SECRET")), nil
 	})
 
 	if err != nil {
@@ -230,6 +232,7 @@ func (*UserRoutesHandler) Logout(c echo.Context) error {
 	})
 	return c.String(http.StatusOK, "logged out")
 }
+
 func (*UserRoutesHandler) GenerateToken(c echo.Context) error {
 	return nil
 }

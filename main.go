@@ -31,8 +31,14 @@ func init() {
 
 func main() {
 
+	mongoDatabase := mongoDBConnection.Database(os.Getenv("MONGODB_DATABASE"))
+
 	userHandler := &routes.UserRoutesHandler{
-		DB: mongoDBConnection.Database(os.Getenv("MONGODB_DATABASE")),
+		DB: mongoDatabase,
+	}
+
+	teamHandler := &routes.TeamRoutesHandler{
+		DB: mongoDatabase,
 	}
 
 	e := echo.New()
@@ -49,6 +55,7 @@ func main() {
 	apiGroup := e.Group("/v1/api")
 
 	userHandler.Register(apiGroup)
+	teamHandler.Register(apiGroup)
 
 	e.Start(":1337")
 

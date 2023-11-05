@@ -16,7 +16,7 @@ func ValidateJWT(token string, c echo.Context) (bool, error) {
 			return nil, errors.New("invalid token")
 		}
 
-		return os.Getenv("JWT_SECRET"), nil
+		return []byte(os.Getenv("JWT_SECRET")), nil
 	})
 
 	if err != nil {

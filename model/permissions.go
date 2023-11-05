@@ -23,10 +23,20 @@ const (
 )
 
 const (
-	IdentityScope = "maven:identity"
+	ManagePermissions = "maven:perms:manage_perms"
+	ManageAccounts    = "maven:perms:manage_accounts"
+	ViewAccounts      = "maven:perms:view_accounts"
+
+	TeamUploadArtifacts = "maven:team:upload_artifacts"
+	TeamOwner           = "maven:team:owner"
 )
 
-type Permissible interface {
-	HasPermission(int) bool
-	TogglePermission(int)
-}
+const (
+	IdentityScope = "maven:identity"
+
+	ReadTeamRepoScope  = "maven:team_repo:read"
+	WriteTeamRepoScope = "maven:team_repo:write"
+
+	ReadPersonalRepoScope  = "maven:personal_repo:read"
+	WritePersonalRepoScope = "maven:personal_repo:read"
+)
