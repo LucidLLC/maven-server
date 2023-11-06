@@ -15,6 +15,7 @@ import (
 	"github.com/ninjaswtf/maven/model"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -40,13 +41,23 @@ func (u *UserRoutesHandler) Register(e *echo.Group) {
 		authGroup.POST("/login", u.Login)
 		authGroup.POST("/refresh", u.Refresh)
 	}
+
+	u.DB.CreateCollection(context.Background(), "users")
+	u.DB.Collection("users").Indexes().CreateOne(context.Background(), mongo.IndexModel{
+		Keys: bson.D{
+			{
+				Key:   "username",
+				Value: "text",
+			},
+		},
+		Options: options.Index().SetUnique(true),
+	})
 }
 
 func (u *UserRoutesHandler) Signup(c echo.Context) error {
 	var signupRequest AuthRequest
 
 	if err := c.Bind(&signupRequest); err != nil {
-		log.Println(err)
 		return c.JSON(http.StatusBadRequest, model.NewError(http.StatusBadRequest, "invalid body"))
 	}
 
